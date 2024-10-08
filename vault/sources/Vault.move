@@ -647,6 +647,24 @@ module titusvaults::Vault {
         return coin::value(&vault.coin_store)
     }
 
+    #[view]
+    public fun strike_price(round_id: u64): u64 acquires VaultMap {
+        let vault_map = borrow_global_mut<VaultMap>(@titusvaults);
+        // current round
+        let round_index = round_id - 1;
+        let round_state = vector::borrow_mut(&mut vault_map.rounds, round_index);
+        return round_state.strike_price
+    }
+
+    #[view]
+    public fun premium_price(round_id: u64): u64 acquires VaultMap {
+        let vault_map = borrow_global_mut<VaultMap>(@titusvaults);
+        // current round
+        let round_index = round_id - 1;
+        let round_state = vector::borrow_mut(&mut vault_map.rounds, round_index);
+        return round_state.premium_price
+    }
+
     // --- tests ---
     #[test_only]
     use aptos_framework::aptos_coin::{Self, AptosCoin};
@@ -744,7 +762,7 @@ module titusvaults::Vault {
     // test standard withdraw vault
     #[test(titusvaults = @titusvaults, user = @0x2)]
     // expected failure because of timing restriction
-    #[expected_failure]
+    #[expected_failure(abort_code = E_NOT_STANDARD_WITHDRAWAL)]
     fun test_standard_withdraw_vault(titusvaults: &signer, user: signer) acquires Vault, VaultMap {
         setup();
 
@@ -776,5 +794,41 @@ module titusvaults::Vault {
 
         coin::destroy_burn_cap(burn);
         coin::destroy_mint_cap(mint);
+    }
+
+    // test set strike price
+    #[test(titusvaults = @titusvaults)]
+    fun test_set_strike_price(titusvaults: &signer) acquires VaultMap {
+        setup();
+
+        // Initialize RoundState
+        initialize_round_state<AptosCoin, AptosCoin>(titusvaults);
+
+        // create vault
+        create_vault<AptosCoin, AptosCoin>(titusvaults);
+
+        // set the strike price
+        setStrikePrice(titusvaults, 15, 1);
+
+        // check the strike pricee = 15
+        assert!(strike_price(1) == 15, E_INVALID_OPERATION);
+    }
+
+    // test set premium price
+    #[test(titusvaults = @titusvaults)]
+        fun test_set_premium_price(titusvaults: &signer) acquires VaultMap {
+        setup();
+
+        // Initialize RoundState
+        initialize_round_state<AptosCoin, AptosCoin>(titusvaults);
+
+        // create vault
+        create_vault<AptosCoin, AptosCoin>(titusvaults);
+
+        // set the premium price
+        setPremiumPrice(titusvaults, 10, 1);
+
+        // check the premium pricee = 10
+        assert!(premium_price(1) == 10, E_INVALID_OPERATION);
     }
 }

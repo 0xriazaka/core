@@ -14,9 +14,11 @@ module titusvaults::Marketplace {
     const EINSUFFICIENT_PAYMENT: u64 = 5;
     const EOPTION_ALREADY_SOLD: u64 =  6;
     // tests errors
-    const EINVALID_LISTING_COUNT: u64 = 1;
-    const EINVALID_OPTION_CONTRACT_ID: u64 = 2;
-    const EINVALID_PRICE: u64 = 3;
+    const EINVALID_LISTING_COUNT: u64 = 7;
+    const EINVALID_OPTION_CONTRACT_ID: u64 = 8;
+    const EINVALID_PRICE: u64 = 9;
+    const E_BALANCE_INCORRECT: u64 = 10;
+    const E_NOT_SOLD: u64 = 11;
 
     // --- structs ---
     struct Listing has key, store, drop {
@@ -231,12 +233,12 @@ module titusvaults::Marketplace {
     use std::signer;
 
     #[test_only]
-    fun setup() {
-        
+    fun get_user_balance(user: &signer): u64 {
+        coin::balance<AptosCoin>(signer::address_of(user))
     }
 
     // test list options
-    #[test(titusmarketplace = @titusmarketplace, user = @0x2, framework = @aptos_framework)]
+    #[test(titusmarketplace = @titusmarketplace, user = @0x123, framework = @aptos_framework)]
     fun test_list_options(titusmarketplace: &signer, user: &signer, framework: &signer) acquires Listings {
 
         // Initialize Listings
@@ -270,8 +272,37 @@ module titusvaults::Marketplace {
         assert!(listing2.price == 200, EINVALID_PRICE);
     }
 
+    #[test(titusmarketplace = @titusmarketplace, user = @0x123, framework = @aptos_framework)]
+    #[expected_failure(abort_code = EOPTION_ALREADY_LISTED)]
+    fun test_list_already_listed_option(titusmarketplace: &signer, user: &signer, framework: &signer) acquires Listings {
+
+        // Initialize Listings
+        initialize(titusmarketplace);
+
+        // set current timestamp
+        timestamp::set_time_has_started_for_testing(framework);
+        timestamp::update_global_time_for_test(1000000000);
+
+        // set up test parameters
+        let list_params1 = vector::empty<ListingParams>();
+        let param1 = ListingParams { option_contract_id: 1, price: 100, expiry_date: 2000000000 };
+        vector::push_back(&mut list_params1, param1);
+
+        // list options
+        list_options(user, list_params1);
+
+        // attempt to list the same option again (should fail)
+        // set up test parameters
+        let list_params2 = vector::empty<ListingParams>();
+        let param2 = ListingParams { option_contract_id: 1, price: 100, expiry_date: 2000000000 };
+        vector::push_back(&mut list_params2, param2);
+
+        // list options 
+        list_options(user, list_params2);
+    }
+
     // test list options expired
-    #[test(titusmarketplace = @titusmarketplace, user = @0x2, framework = @aptos_framework)]
+    #[test(titusmarketplace = @titusmarketplace, user = @0x123, framework = @aptos_framework)]
     // expected failure because of timing restriction
     #[expected_failure(abort_code = EOPTION_EXPIRED)]
     fun test_list_options_expired(titusmarketplace: &signer, user: &signer, framework: &signer) acquires Listings {
@@ -293,40 +324,132 @@ module titusvaults::Marketplace {
     }
 
     // test buy options
-    #[test(titusmarketplace = @titusmarketplace, user = @0x2, framework = @aptos_framework)]
-    fun test_buy_options(titusmarketplace: &signer, user: &signer, framework: &signer) acquires Listings {
+    #[test(titusmarketplace = @titusmarketplace, user1 = @0x123, user2 = @0x345, framework = @aptos_framework)]
+    fun test_buy_options(titusmarketplace: &signer, user1: &signer, user2: &signer, framework: &signer) acquires Listings {
 
         // Initialize Listings
         initialize(titusmarketplace);
 
         // set up test parameters
         let list_params = vector::empty<ListingParams>();
-        let param = ListingParams { option_contract_id: 1, price: 100, expiry_date: 2000000000 };
-        vector::push_back(&mut list_params, param);
+        let param1 = ListingParams { option_contract_id: 1, price: 100, expiry_date: 2000000000 };
+        let param2 = ListingParams { option_contract_id: 2, price: 200, expiry_date: 2000000000 };
+        vector::push_back(&mut list_params, param1);
+        vector::push_back(&mut list_params, param2);
 
         // set current timestamp
         timestamp::set_time_has_started_for_testing(framework);
         timestamp::update_global_time_for_test(800000000);
 
         // list options
-        list_options(user, list_params);
+        list_options(user1, list_params);
 
-        // add 100 coins to the user
-        let user_addr = signer::address_of(user);
-        let (burn, mint) = aptos_framework::aptos_coin::initialize_for_test(&account::create_signer_for_test(@0x1));
-        aptos_framework::aptos_account::create_account(copy user_addr);
+        // init buy options
+        let (burn, mint) = aptos_framework::aptos_coin::initialize_for_test(framework);
+
+        let titusmarketplace_addr = signer::address_of(titusmarketplace); //marketplace
+        let user1_addr = signer::address_of(user1); // seller
+        let user2_addr = signer::address_of(user2); // buyer
+
+        aptos_framework::aptos_account::create_account(titusmarketplace_addr);
+        aptos_framework::aptos_account::create_account(user1_addr);
+        aptos_framework::aptos_account::create_account(user2_addr);
+
+        aptos_framework::coin::register<AptosCoin>(titusmarketplace);
+        aptos_framework::coin::register<AptosCoin>(user1);
+        aptos_framework::coin::register<AptosCoin>(user2);
+
+        // add 1000 coins to the buyer     
         let coin = coin::mint<AptosCoin>(1000, &mint);
-        coin::deposit(copy user_addr, coin);
-
-        let payment = coin::withdraw<AptosCoin>(user, 100);
+        coin::deposit(user2_addr, coin);
 
         // buy options
+        let payment = coin::withdraw<AptosCoin>(user2, 300);
+
         let options_contracts_ids = vector::empty<u64>();
         vector::push_back(&mut options_contracts_ids, 1);
+        vector::push_back(&mut options_contracts_ids, 2);
 
-        buy_options(user, options_contracts_ids, payment);
+        buy_options(user2, options_contracts_ids, payment);
+
+        // assert balances
+        assert!(get_user_balance(user2) == 700, E_BALANCE_INCORRECT); // 1000 - 300
+        assert!(get_user_balance(titusmarketplace) == 300, E_BALANCE_INCORRECT); // +300
+
+        // assert listing option id 1 is sold
+        {
+            let listings = borrow_global_mut<Listings>(@titusmarketplace);
+            let (listing1, listing_index1) = get_listing(listings, 1); // listing option id 1
+            assert!(listing1.is_sold, E_NOT_SOLD);
+        };
+
+        // assert listing option id 2 is sold
+        {
+            let listings = borrow_global_mut<Listings>(@titusmarketplace);
+            let (listing2, listing_index2) = get_listing(listings, 2); // listing option id 2
+            assert!(listing2.is_sold, E_NOT_SOLD);
+        };
 
         coin::destroy_burn_cap(burn);
         coin::destroy_mint_cap(mint);
+    }
+
+    // test cancel listing
+    #[test(titusmarketplace = @titusmarketplace, user = @0x123, framework = @aptos_framework)]
+    fun test_cancel_listing(titusmarketplace: &signer, user: &signer, framework: &signer) acquires Listings {
+
+        // Initialize Listings
+        initialize(titusmarketplace);
+
+        // set up test parameters
+        let list_params = vector::empty<ListingParams>();
+        let param1 = ListingParams { option_contract_id: 1, price: 100, expiry_date: 1000000000 };
+        let param2 = ListingParams { option_contract_id: 2, price: 200, expiry_date: 1000000000 };
+        vector::push_back(&mut list_params, param1);
+        vector::push_back(&mut list_params, param2);
+
+        // set current timestamp
+        timestamp::set_time_has_started_for_testing(framework);
+        timestamp::update_global_time_for_test(900000000);
+
+        // list options
+        list_options(user, list_params);
+
+        // cancel listing
+        let cancel_ids = vector::empty<u64>();
+        vector::push_back(&mut cancel_ids, 1);
+        cancel_listing(user, cancel_ids);
+
+        // assert listing-1 is deleted
+        assert!(!is_option_listed(1), 1);
+        // assert listing-2 is not deleted
+        assert!(is_option_listed(2), 2);
+    }
+
+    // test cancel listing
+    #[test(titusmarketplace = @titusmarketplace, user1 = @0x123, user2 = @0x345, framework = @aptos_framework)]
+    // test cancel listing user-1 with user-2
+    #[expected_failure(abort_code = EUNAUTHORIZED)]
+    fun test_cancel_listing_wrong_user(titusmarketplace: &signer, user1: &signer, user2: &signer, framework: &signer) acquires Listings {
+
+        // Initialize Listings
+        initialize(titusmarketplace);
+
+        // set up test parameters
+        let list_params = vector::empty<ListingParams>();
+        let param = ListingParams { option_contract_id: 1, price: 100, expiry_date: 1000000000 };
+        vector::push_back(&mut list_params, param);
+
+        // set current timestamp
+        timestamp::set_time_has_started_for_testing(framework);
+        timestamp::update_global_time_for_test(900000000);
+
+        // user-1 list options
+        list_options(user1, list_params);
+
+        // user-2 cancel listing of user-1
+        let cancel_ids = vector::empty<u64>();
+        vector::push_back(&mut cancel_ids, 1);
+        cancel_listing(user2, cancel_ids);
     }
 }

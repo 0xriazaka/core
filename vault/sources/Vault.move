@@ -468,7 +468,7 @@ module titusvaults::Vault {
         event::emit(premium_price_updated_event);
     }
 
-    public (friend) fun executeRound<VaultT, AssetT>(_host: &signer, round_id: u64) acquires VaultMap, Vault {   
+    public (friend) fun executeRound<VaultT, AssetT>(_host: &signer, round_id: u64, token_name: String, balance: u64) acquires VaultMap, Vault {   
         
         {   
             let vault_map = borrow_global_mut<VaultMap>(@titusvaults);
@@ -478,7 +478,7 @@ module titusvaults::Vault {
             let current_round_id = round_state.current_round_id;
             // exercise the previous round
             let prev_round_id = current_round_id - 1;
-            exerciseRound<VaultT, AssetT>(_host, prev_round_id);
+        exerciseRound<VaultT, AssetT>(_host, prev_round_id, token_name, balance);
         };
 
         {
@@ -506,7 +506,7 @@ module titusvaults::Vault {
     }
     
     // exercise round
-    public (friend) fun exerciseRound<VaultT, AssetT>(_host: &signer, round_id: u64) acquires VaultMap, Vault{
+    public (friend) fun exerciseRound<VaultT, AssetT>(_host: &signer, round_id: u64, token_name: String, balance: u64) acquires VaultMap, Vault{
         let host_addr = address_of(_host);
         assert!(host_addr == @titusvaults, E_NOT_AUTHORIZED);
         
@@ -521,10 +521,7 @@ module titusvaults::Vault {
         let current_time = timestamp::now_microseconds();
         assert!(current_time >= round_state.exercise_time && current_time <= round_state.close_timestamp, E_INVALID_OPERATION);
 
-        //settle options
-        let token_name = string::utf8(b"token_name");
-        let balance = 100;
-
+        controller::init_module(_host);
         controller::settle_options(_host, token_name, balance);
 
         let settle_options_event = SettleOptionsEvent {
@@ -600,7 +597,6 @@ module titusvaults::Vault {
         let current_time = timestamp::now_microseconds();
         let round_start_time = current_time;
         let active_phase_end_time = round_start_time + DEPOSIT_PHASE_DURATION;
-
     }  
 
     public (friend) fun closeOptionsForRound(_host: &signer, round_id: u64, plus_token_name: String, minus_token_name: String, balance: u64) acquires VaultMap {
@@ -830,5 +826,59 @@ module titusvaults::Vault {
 
         // check the premium pricee = 10
         assert!(premium_price(1) == 10, E_INVALID_OPERATION);
+    }
+
+    // test execute round
+    #[test(titusvaults = @titusvaults, user = @0x123, framework = @aptos_framework)]
+    fun test_execute_round(titusvaults: &signer, user: &signer, framework: &signer) acquires Vault, VaultMap {
+
+        // setup
+        setup();
+
+        let (burn, mint) = aptos_framework::aptos_coin::initialize_for_test(framework);
+        account::create_account_for_test(signer::address_of(titusvaults));
+        aptos_framework::coin::register<AptosCoin>(titusvaults);
+
+        // Initialize RoundState
+        initialize_round_state<AptosCoin, AptosCoin>(titusvaults);
+
+        // create vault
+        create_vault<AptosCoin, AptosCoin>(titusvaults);
+
+        // set strike price and premium price for both rounds
+        setStrikePrice(titusvaults, 10, 1);
+        setPremiumPrice(titusvaults, 5, 1);
+
+        // init buy options
+
+
+        //let titusvaults_addr = signer::address_of(titusvaults);
+        let user_addr = signer::address_of(user);
+
+        //aptos_framework::aptos_account::create_account(titusvaults_addr);
+        aptos_framework::aptos_account::create_account(user_addr);
+
+        aptos_framework::coin::register<AptosCoin>(user);
+
+        // add 1000 coins to the buyer     
+        let coin = coin::mint<AptosCoin>(1000, &mint);
+        coin::deposit(copy user_addr, coin);
+        
+        // user deposit the 100 coins into the vault
+        let deposit_coin = coin::withdraw<AptosCoin>(user, 100);
+        deposit_vault<AptosCoin, AptosCoin>(user, deposit_coin, 1);
+
+        // update round
+        update_round_from_keeper(titusvaults, 1);
+
+        // move time forward to the end of the deposit phase for the first round
+        let seconds_to_exercise = (DEPOSIT_PHASE_DURATION + OPTION_EXPIRY_DURATION) / 1000000;
+        timestamp::fast_forward_seconds(seconds_to_exercise);
+
+        // exercise the round    
+        exerciseRound<AptosCoin, AptosCoin>(titusvaults, 2, string::utf8(b"token_name"), 100);
+
+        coin::destroy_burn_cap(burn);
+        coin::destroy_mint_cap(mint);
     }
 }
